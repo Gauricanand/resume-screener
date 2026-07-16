@@ -3,7 +3,7 @@
 A free AI-style resume screening tool. No API key needed. Works in any browser.
 
 ## Live App
-[Click here to use the app](https://yourname-resume-screener.streamlit.app)
+[Click here to use the app](https://Gauricanand-resume-screener.streamlit.app)
 
 ## What it does
 - Upload resume files directly (PDF, Word, TXT)
