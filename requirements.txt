@@ -1,1 +1,5 @@
-
+streamlit
+openpyxl
+pyyaml
+pypdf2
+python-docx
