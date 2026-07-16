@@ -1,8 +1,31 @@
+# ================================================
+#  RESUME SCREENER — Full Version
+#  - File upload (PDF, Word, TXT)
+#  - Skills config from YAML
+#  - CSV export
+#  - Visual charts
+#  - No pandas import (removed)
+# ================================================
+
 import streamlit as st
 import csv
 import io
 import re
-import pandas as pd
+import yaml
+import os
+from pathlib import Path
+
+try:
+    import PyPDF2
+    PDF_OK = True
+except ImportError:
+    PDF_OK = False
+
+try:
+    from docx import Document as DocxDocument
+    DOCX_OK = True
+except ImportError:
+    DOCX_OK = False
 
 st.set_page_config(
     page_title="Resume Screener",
@@ -10,17 +33,55 @@ st.set_page_config(
     layout="wide"
 )
 
-ALL_SKILLS = [
-    "Python", "JavaScript", "TypeScript", "Java", "C++", "Go", "Ruby", "PHP",
-    "React", "Vue.js", "Angular", "Next.js", "HTML", "CSS",
-    "Node.js", "Django", "FastAPI", "Flask", "Spring Boot",
-    "PostgreSQL", "MySQL", "MongoDB", "Redis", "SQLite",
-    "REST APIs", "GraphQL",
-    "AWS", "GCP", "Azure",
-    "Docker", "Kubernetes", "CI/CD",
-    "Machine learning", "TensorFlow", "PyTorch", "scikit-learn",
-    "Git", "Linux", "Agile", "Scrum",
-]
+# ================================================
+#  LOAD CONFIG FROM YAML
+# ================================================
+
+def load_config():
+    config_path = Path("skills_config.yaml")
+    if config_path.exists():
+        with open(config_path, "r") as f:
+            return yaml.safe_load(f)
+    # Fallback if yaml not found
+    return {
+        "all_skills": [
+            "Python", "JavaScript", "TypeScript", "Java",
+            "React", "Vue.js", "Node.js", "Django", "FastAPI",
+            "PostgreSQL", "MySQL", "MongoDB", "Redis",
+            "REST APIs", "GraphQL", "AWS", "GCP", "Azure",
+            "Docker", "Kubernetes", "CI/CD",
+            "Machine learning", "TensorFlow", "PyTorch", "scikit-learn",
+            "Git", "Linux",
+        ],
+        "skill_map": {
+            "python": "Python", "javascript": "JavaScript",
+            "react": "React", "node": "Node.js", "aws": "AWS",
+            "docker": "Docker", "postgres": "PostgreSQL",
+        },
+        "group_map": {
+            "cloud": ["AWS", "GCP", "Azure"],
+            "frontend": ["React", "Vue.js", "Angular", "JavaScript"],
+            "backend": ["Python", "Node.js", "Django", "FastAPI"],
+            "devops": ["Docker", "Kubernetes", "CI/CD"],
+            "ml": ["Machine learning", "TensorFlow", "PyTorch", "scikit-learn"],
+        },
+        "skill_questions": {
+            "Python": "Walk me through a complex Python project you built.",
+            "React": "How do you manage state in a large React app?",
+            "AWS": "Which AWS services have you used and what did you build?",
+            "Docker": "Walk me through containerising an app with Docker.",
+        }
+    }
+
+CONFIG = load_config()
+ALL_SKILLS    = CONFIG.get("all_skills", [])
+SKILL_MAP     = CONFIG.get("skill_map", {})
+GROUP_MAP     = CONFIG.get("group_map", {})
+SKILL_QUESTIONS = CONFIG.get("skill_questions", {})
+
+# ================================================
+#  SAMPLE DATA
+# ================================================
 
 SAMPLE_RESUMES = """--- CANDIDATE: Priya Sharma ---
 Experience: 5 years
@@ -57,8 +118,100 @@ Skills: Python, FastAPI, PostgreSQL, Redis, Docker, GCP, REST APIs
 Education: B.Tech Computer Science, NIT Trichy
 Notable: Built order system handling 100k plus orders per day. ML side projects with scikit-learn."""
 
+# ================================================
+#  FILE READING
+# ================================================
 
-def parse_resumes(raw_text):
+def read_pdf(file) -> str:
+    if not PDF_OK:
+        return ""
+    try:
+        reader = PyPDF2.PdfReader(file)
+        return " ".join(page.extract_text() or "" for page in reader.pages)
+    except Exception:
+        return ""
+
+def read_docx(file) -> str:
+    if not DOCX_OK:
+        return ""
+    try:
+        doc = DocxDocument(file)
+        return " ".join(p.text for p in doc.paragraphs)
+    except Exception:
+        return ""
+
+def read_txt(file) -> str:
+    try:
+        return file.read().decode("utf-8", errors="ignore")
+    except Exception:
+        return ""
+
+def extract_text_from_file(uploaded_file) -> str:
+    name = uploaded_file.name.lower()
+    if name.endswith(".pdf"):
+        return read_pdf(uploaded_file)
+    elif name.endswith(".docx"):
+        return read_docx(uploaded_file)
+    elif name.endswith(".txt"):
+        return read_txt(uploaded_file)
+    return ""
+
+def parse_candidate_from_text(text: str, filename: str) -> dict:
+    name      = filename.replace(".pdf","").replace(".docx","").replace(".txt","").replace("_"," ").replace("-"," ").title()
+    skills    = []
+    years     = 0
+    role      = ""
+    education = ""
+    notes     = ""
+
+    text_lower = text.lower()
+
+    for skill in ALL_SKILLS:
+        if skill.lower() in text_lower:
+            skills.append(skill)
+
+    year_patterns = [
+        r'(\d+)\+?\s*years?\s*of\s*experience',
+        r'(\d+)\+?\s*years?\s*experience',
+        r'experience\s*:?\s*(\d+)\+?\s*years?',
+    ]
+    for pattern in year_patterns:
+        match = re.search(pattern, text_lower)
+        if match:
+            years = int(match.group(1))
+            break
+
+    lines = text.split("\n")
+    for line in lines[:20]:
+        line = line.strip()
+        low  = line.lower()
+        if any(x in low for x in ["engineer", "developer", "manager", "analyst", "architect", "lead", "intern"]):
+            if len(line) < 100:
+                role = line
+                break
+
+    edu_keywords = ["b.tech", "m.tech", "b.e.", "m.e.", "bsc", "msc", "bachelor", "master", "phd", "iit", "bits", "nit"]
+    for line in lines:
+        if any(kw in line.lower() for kw in edu_keywords):
+            education = line.strip()
+            break
+
+    notes = text[:300].replace("\n", " ").strip()
+
+    return {
+        "name":         name,
+        "current_role": role or "Not specified",
+        "years_exp":    years,
+        "skills":       skills,
+        "education":    education,
+        "notes":        notes,
+    }
+
+# ================================================
+#  PARSE PASTED RESUMES
+# ================================================
+
+def parse_resumes(raw_text: str) -> list:
     candidates = []
     blocks = raw_text.strip().split("--- CANDIDATE:")
     for block in blocks:
@@ -100,8 +253,11 @@ def parse_resumes(raw_text):
         })
     return candidates
 
+# ================================================
+#  SCORING
+# ================================================
 
-def score_candidate(candidate, required_skills, min_years):
+def score_candidate(candidate: dict, required_skills: list, min_years: int) -> dict:
     skills_lower = [s.lower() for s in candidate["skills"]]
     matched = [s for s in required_skills if s.lower() in skills_lower]
     missing = [s for s in required_skills if s.lower() not in skills_lower]
@@ -143,9 +299,7 @@ def score_candidate(candidate, required_skills, min_years):
         summary = f"Weak fit. Only {len(matched)}/{len(required_skills)} skills matched. Missing {', '.join(missing[:4]) or 'N/A'}."
 
     return {
-        "name":             candidate["name"],
-        "current_role":     candidate["current_role"],
-        "years_exp":        years,
+        **candidate,
         "score":            overall,
         "technical_score":  tech_score,
         "experience_score": exp_score,
@@ -154,13 +308,13 @@ def score_candidate(candidate, required_skills, min_years):
         "missing_skills":   missing[:3],
         "red_flags":        red_flags,
         "summary":          summary,
-        "education":        candidate["education"],
-        "notes":            candidate["notes"],
-        "skills":           candidate["skills"],
     }
 
+# ================================================
+#  Q&A
+# ================================================
 
-def answer_question(question, candidates):
+def answer_question(question: str, candidates: list) -> str:
     q = question.lower().strip()
 
     if not candidates:
@@ -170,13 +324,13 @@ def answer_question(question, candidates):
         scored = sorted(candidates, key=lambda x: x.get("score", 0), reverse=True)
         top = scored[0]
         return (
-            f"**{top['name']}** is the top candidate with **{top.get('score', 'N/A')}%** match "
-            f"and verdict **{top.get('verdict', 'N/A')}**. "
+            f"**{top['name']}** is the top candidate with **{top.get('score','N/A')}%** match "
+            f"and verdict **{top.get('verdict','N/A')}**. "
             f"{top['years_exp']} years exp as {top['current_role']}. "
             f"Key skills: {', '.join(top['skills'][:4])}."
         )
 
-    if any(x in q for x in ["list all", "all candidates", "everyone", "who do we have", "how many"]):
+    if any(x in q for x in ["list all", "all candidates", "everyone", "how many", "who do we have"]):
         lines = [f"**{i}. {c['name']}** — {c['current_role']}, {c['years_exp']} yrs" for i, c in enumerate(candidates, 1)]
         return f"**{len(candidates)} candidates loaded:**\n\n" + "\n\n".join(lines)
 
@@ -196,18 +350,13 @@ def answer_question(question, candidates):
         bot = min(candidates, key=lambda x: x["years_exp"])
         return f"**{bot['name']}** has the least experience — **{bot['years_exp']} years** as {bot['current_role']}."
 
-    if any(x in q for x in ["education", "degree", "university", "college", "study", "studied"]):
+    if any(x in q for x in ["education", "degree", "university", "college", "study"]):
         lines = [f"**{c['name']}** — {c['education'] or 'Not specified'}" for c in candidates]
         return "Education details:\n\n" + "\n\n".join(lines)
 
-    if any(x in q for x in ["years", "experience", "exp"]) and not any(x in q for x in ["most", "least"]):
-        lines = sorted(candidates, key=lambda x: x["years_exp"], reverse=True)
-        result = [f"**{c['name']}** — {c['years_exp']} years" for c in lines]
-        return "Experience breakdown:\n\n" + "\n\n".join(result)
-
-    if any(x in q for x in ["skill", "skills", "know", "knows", "capable", "tech"]):
-        lines = [f"**{c['name']}** — {', '.join(c['skills'][:6]) or 'Not listed'}" for c in candidates]
-        return "Skills for all candidates:\n\n" + "\n\n".join(lines)
+    if any(x in q for x in ["note", "notable", "achievement", "project"]):
+        lines = [f"**{c['name']}** — {c['notes'] or 'Not specified'}" for c in candidates]
+        return "Achievements and notes:\n\n" + "\n\n".join(lines)
 
     if any(x in q for x in ["gap", "missing", "lack", "weak"]):
         found = [c for c in candidates if c.get("missing_skills")]
@@ -222,10 +371,6 @@ def answer_question(question, candidates):
             lines = [f"**{c['name']}** ({c.get('score','N/A')}%)" for c in found]
             return "Not recommended:\n\n" + "\n\n".join(lines)
         return "All candidates have some potential."
-
-    if any(x in q for x in ["note", "notable", "achievement", "project", "accomplish"]):
-        lines = [f"**{c['name']}** — {c['notes'] or 'Not specified'}" for c in candidates]
-        return "Achievements and notes:\n\n" + "\n\n".join(lines)
 
     if "vs" in q or "compare" in q or "better" in q or "difference" in q:
         matched_people = []
@@ -245,31 +390,7 @@ def answer_question(question, candidates):
                 f"**{winner}** has the overall edge."
             )
 
-    skill_map = {
-        "python": "Python", "javascript": "JavaScript", "typescript": "TypeScript",
-        "java": "Java", "react": "React", "vue": "Vue.js", "angular": "Angular",
-        "node": "Node.js", "django": "Django", "fastapi": "FastAPI", "flask": "Flask",
-        "spring": "Spring Boot", "postgres": "PostgreSQL", "mysql": "MySQL",
-        "mongodb": "MongoDB", "redis": "Redis", "aws": "AWS", "gcp": "GCP",
-        "azure": "Azure", "docker": "Docker", "kubernetes": "Kubernetes",
-        "ci/cd": "CI/CD", "cicd": "CI/CD", "graphql": "GraphQL", "rest": "REST APIs",
-        "git": "Git", "linux": "Linux", "tensorflow": "TensorFlow",
-        "pytorch": "PyTorch", "scikit": "scikit-learn",
-    }
-
-    group_map = {
-        "cloud":       ["AWS", "GCP", "Azure"],
-        "frontend":    ["React", "Vue.js", "Angular", "JavaScript", "TypeScript", "HTML", "CSS"],
-        "backend":     ["Python", "Node.js", "Django", "FastAPI", "Flask", "Spring Boot", "Java"],
-        "fullstack":   ["React", "Vue.js", "Python", "Node.js", "Django", "FastAPI"],
-        "full stack":  ["React", "Vue.js", "Python", "Node.js", "Django", "FastAPI"],
-        "devops":      ["Docker", "Kubernetes", "CI/CD", "AWS", "GCP", "Azure"],
-        "ml":          ["Machine learning", "TensorFlow", "PyTorch", "scikit-learn"],
-        "machine learning": ["Machine learning", "TensorFlow", "PyTorch", "scikit-learn"],
-        "database":    ["PostgreSQL", "MySQL", "MongoDB", "Redis", "SQLite"],
-    }
-
-    for keyword, skill_list in group_map.items():
+    for keyword, skill_list in GROUP_MAP.items():
         if keyword in q:
             found = [c for c in candidates if any(s in c["skills"] for s in skill_list)]
             if found:
@@ -277,7 +398,7 @@ def answer_question(question, candidates):
                 return f"Candidates with **{keyword}** skills:\n\n" + "\n\n".join(lines)
             return f"No candidates found with **{keyword}** skills."
 
-    for keyword, skill in skill_map.items():
+    for keyword, skill in SKILL_MAP.items():
         if keyword in q:
             found = [c for c in candidates if skill in c["skills"]]
             if found:
@@ -300,12 +421,12 @@ def answer_question(question, candidates):
                 )
 
     return (
-        "I can answer questions like:\n\n"
+        "I can answer:\n\n"
         "- *Who is the best fit?*\n"
         "- *List all candidates*\n"
         "- *Who has Python / React / AWS?*\n"
         "- *Who has the most experience?*\n"
-        "- *Who has frontend / backend / cloud skills?*\n"
+        "- *Who has frontend / backend / cloud / ml skills?*\n"
         "- *Compare Priya vs Sneha*\n"
         "- *Tell me about Arjun*\n"
         "- *What is everyone's education?*\n"
@@ -313,43 +434,23 @@ def answer_question(question, candidates):
         "- *Who has skill gaps?*"
     )
 
+# ================================================
+#  INTERVIEW QUESTIONS
+# ================================================
 
-def generate_interview_qs(c):
-    skill_qs = {
-        "Python":       "Walk me through a complex Python project you built. What were the key decisions?",
-        "FastAPI":      "How have you used FastAPI in production? How did you handle auth and performance?",
-        "Django":       "How did you structure a large Django project and handle migrations at scale?",
-        "React":        "How do you manage state in a large React app? Redux vs Context?",
-        "PostgreSQL":   "How have you optimised slow PostgreSQL queries in production?",
-        "Docker":       "Walk me through containerising an application with Docker end to end.",
-        "AWS":          "Which AWS services have you used and what did you build with them?",
-        "GCP":          "What GCP services have you used and what were the main challenges?",
-        "GraphQL":      "Why GraphQL over REST? What tradeoffs did you consider?",
-        "TypeScript":   "How has TypeScript improved your codebase? Give a specific example.",
-        "Node.js":      "How do you handle async and errors in Node.js at scale?",
-        "CI/CD":        "Describe your CI/CD pipeline. What tools and why?",
-        "REST APIs":    "How do you design and version REST APIs? How do you handle breaking changes?",
-        "Redis":        "How have you used Redis in production? What caching strategies?",
-        "Vue.js":       "Vue vs React — key differences and when would you pick Vue?",
-        "MongoDB":      "When would you choose MongoDB over SQL? Give a real example.",
-        "Kubernetes":   "How have you used Kubernetes in production? What problems did it solve?",
-        "Java":         "How have you used Java in a large production system?",
-        "Machine learning": "Walk me through an ML project end to end — data, model, deployment.",
-        "scikit-learn": "What ML models have you built with scikit-learn and how did you evaluate them?",
-    }
-
+def generate_interview_qs(c: dict) -> list:
     questions = []
     count = 0
     for skill in c["skills"]:
-        if skill in skill_qs and count < 2:
-            questions.append(f"**[Technical — {skill}]** {skill_qs[skill]}")
+        if skill in SKILL_QUESTIONS and count < 2:
+            questions.append(f"**[Technical — {skill}]** {SKILL_QUESTIONS[skill]}")
             count += 1
 
     if c.get("missing_skills"):
         for skill in c["missing_skills"][:2]:
             questions.append(
                 f"**[Gap — {skill}]** You do not have much {skill} experience. "
-                f"How would you approach learning it?"
+                f"How would you approach learning it and how quickly could you get up to speed?"
             )
 
     questions.append(
@@ -363,8 +464,11 @@ def generate_interview_qs(c):
 
     return questions[:6]
 
+# ================================================
+#  CSV EXPORT
+# ================================================
 
-def make_csv(candidates):
+def make_csv(candidates: list) -> str:
     output = io.StringIO()
     fields = [
         "rank", "name", "current_role", "years_exp",
@@ -393,13 +497,69 @@ def make_csv(candidates):
         })
     return output.getvalue()
 
+# ================================================
+#  CHARTS
+# ================================================
+
+def show_charts(candidates: list):
+    if not any(c.get("score") for c in candidates):
+        st.info("Screen candidates against a JD first to see charts.")
+        return
+
+    st.subheader("📊 Score Comparison")
+    names  = [c["name"].split()[0] for c in candidates]
+    scores = [c.get("score", 0) for c in candidates]
+    chart_data = {"Candidate": names, "Score": scores}
+    st.bar_chart(
+        data={n: [s] for n, s in zip(names, scores)},
+        use_container_width=True,
+        height=300,
+    )
+
+    st.divider()
+    st.subheader("📊 Technical vs Experience Score")
+    tech_scores = [c.get("technical_score", 0) for c in candidates]
+    exp_scores  = [c.get("experience_score", 0) for c in candidates]
+
+    chart_rows = {}
+    for name, tech, exp in zip(names, tech_scores, exp_scores):
+        chart_rows[name] = {"Technical": tech, "Experience": exp}
+
+    import_data = {
+        "Technical":  tech_scores,
+        "Experience": exp_scores,
+    }
+    st.bar_chart(import_data, use_container_width=True, height=300)
+
+    st.divider()
+    st.subheader("📊 Skill Coverage Across All Candidates")
+    skill_count = {}
+    for c in candidates:
+        for s in c["skills"]:
+            skill_count[s] = skill_count.get(s, 0) + 1
+
+    top_skills = sorted(skill_count.items(), key=lambda x: x[1], reverse=True)[:10]
+    if top_skills:
+        skill_names  = [s[0] for s in top_skills]
+        skill_counts = [s[1] for s in top_skills]
+        st.bar_chart(
+            {name: [count] for name, count in zip(skill_names, skill_counts)},
+            use_container_width=True,
+            height=300,
+        )
+
+    st.divider()
+    st.subheader("📊 Verdict Breakdown")
+    verdict_count = {"Strong yes": 0, "Yes": 0, "Maybe": 0, "No": 0}
+    for c in candidates:
+        v = c.get("verdict", "")
+        if v in verdict_count:
+            verdict_count[v] += 1
+    st.bar_chart(verdict_count, use_container_width=True, height=250)
 
 # ================================================
-#  UI
+#  SESSION STATE INIT
 # ================================================
-
-st.title("🔍 Resume Screener")
-st.caption("Upload as many resumes as you want — then ask any question about them. Free, no API key needed.")
 
 if "candidates" not in st.session_state:
     st.session_state["candidates"] = []
@@ -408,11 +568,18 @@ if "scored" not in st.session_state:
 if "chat_history" not in st.session_state:
     st.session_state["chat_history"] = []
 
+# ================================================
+#  UI
+# ================================================
+
+st.title("🔍 Resume Screener")
+st.caption("Upload resume files or paste them — then ask any question. Free, no API key, works in any browser.")
+
 with st.sidebar:
     st.header("⚙️ Settings")
     min_years = st.slider("Minimum years experience", 1, 15, 4)
     st.divider()
-    st.markdown("**Resume format:**")
+    st.markdown("**Paste format:**")
     st.code(
         "--- CANDIDATE: Full Name ---\n"
         "Experience: 5 years\n"
@@ -429,45 +596,91 @@ with st.sidebar:
     st.divider()
     st.success("100% free. No API key. Works offline.")
 
-tab1, tab2, tab3, tab4, tab5 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
     "📤 Upload Resumes",
     "📋 Screen Against JD",
     "💬 Ask Questions",
     "🎤 Interview Questions",
-    "📁 Export",
+    "📊 Charts",
+    "📁 Export CSV",
 ])
 
+# ── TAB 1: Upload ──────────────────────────────
 with tab1:
     st.subheader("Upload Resumes")
-    st.write("Paste as many resumes as you want. Use the format shown in the sidebar.")
 
-    if st.button("📥 Load Sample Resumes", use_container_width=True):
-        st.session_state["resumes_raw"] = SAMPLE_RESUMES
-        st.rerun()
-
-    resumes_input = st.text_area(
-        "Paste all resumes here",
-        value=st.session_state.get("resumes_raw", ""),
-        height=400,
-        placeholder="--- CANDIDATE: Name ---\nExperience: 5 years\nCurrent Role: Engineer at Company\nSkills: Python, React, AWS\nEducation: B.Tech\nNotable: Key info\n\n--- CANDIDATE: Another Name ---\n..."
+    upload_method = st.radio(
+        "How do you want to add resumes?",
+        ["Upload files (PDF, Word, TXT)", "Paste text"],
+        horizontal=True
     )
 
-    if st.button("✅ Load Resumes", type="primary", use_container_width=True):
-        if not resumes_input.strip():
-            st.error("Paste some resumes first!")
-        elif "--- CANDIDATE:" not in resumes_input:
-            st.error("Use the format: --- CANDIDATE: Name --- (see sidebar)")
-        else:
-            parsed = parse_resumes(resumes_input)
-            if not parsed:
-                st.error("Could not read any candidates. Check the format in the sidebar.")
+    if upload_method == "Upload files (PDF, Word, TXT)":
+        st.write("Upload one file per candidate. Supported: PDF, DOCX, TXT")
+
+        if not PDF_OK:
+            st.warning("PDF support not installed. Run: pip install PyPDF2")
+        if not DOCX_OK:
+            st.warning("Word support not installed. Run: pip install python-docx")
+
+        uploaded_files = st.file_uploader(
+            "Upload resume files",
+            type=["pdf", "docx", "txt"],
+            accept_multiple_files=True
+        )
+
+        if uploaded_files:
+            if st.button("✅ Load Uploaded Resumes", type="primary", use_container_width=True):
+                parsed = []
+                errors = []
+                for f in uploaded_files:
+                    text = extract_text_from_file(f)
+                    if text.strip():
+                        candidate = parse_candidate_from_text(text, f.name)
+                        parsed.append(candidate)
+                    else:
+                        errors.append(f.name)
+
+                if errors:
+                    st.warning(f"Could not read: {', '.join(errors)}")
+
+                if parsed:
+                    st.session_state["candidates"]   = parsed
+                    st.session_state["scored"]       = False
+                    st.session_state["chat_history"] = []
+                    st.success(f"Loaded {len(parsed)} candidates from uploaded files!")
+                    st.rerun()
+                else:
+                    st.error("Could not read any files. Try TXT format or paste text instead.")
+
+    else:
+        if st.button("📥 Load Sample Data", use_container_width=True):
+            st.session_state["resumes_raw"] = SAMPLE_RESUMES
+            st.rerun()
+
+        resumes_input = st.text_area(
+            "Paste resumes here",
+            value=st.session_state.get("resumes_raw", ""),
+            height=400,
+            placeholder="--- CANDIDATE: Name ---\nExperience: 5 years\nCurrent Role: Engineer at Company\nSkills: Python, React, AWS\nEducation: B.Tech\nNotable: Key info\n\n--- CANDIDATE: Another Name ---\n..."
+        )
+
+        if st.button("✅ Load Resumes", type="primary", use_container_width=True):
+            if not resumes_input.strip():
+                st.error("Paste some resumes first!")
+            elif "--- CANDIDATE:" not in resumes_input:
+                st.error("Use the format: --- CANDIDATE: Name --- (see sidebar)")
             else:
-                st.session_state["candidates"]   = parsed
-                st.session_state["resumes_raw"]  = resumes_input
-                st.session_state["scored"]       = False
-                st.session_state["chat_history"] = []
-                st.success(f"Loaded {len(parsed)} candidates!")
-                st.rerun()
+                parsed = parse_resumes(resumes_input)
+                if not parsed:
+                    st.error("Could not read any candidates. Check the format.")
+                else:
+                    st.session_state["candidates"]   = parsed
+                    st.session_state["resumes_raw"]  = resumes_input
+                    st.session_state["scored"]       = False
+                    st.session_state["chat_history"] = []
+                    st.success(f"Loaded {len(parsed)} candidates!")
+                    st.rerun()
 
     if st.session_state["candidates"]:
         st.divider()
@@ -479,9 +692,9 @@ with tab1:
                 st.write(f"**Skills:** {', '.join(c['skills']) or 'Not listed'}")
                 st.write(f"**Notes:** {c['notes'] or 'None'}")
 
+# ── TAB 2: Screen ──────────────────────────────
 with tab2:
     st.subheader("Screen Against a Job Description")
-    st.write("Paste a JD to get match scores for every candidate.")
 
     if not st.session_state["candidates"]:
         st.info("Load resumes first in the Upload Resumes tab.")
@@ -511,7 +724,7 @@ with tab2:
                     st.session_state["scored"]     = True
                     st.success(f"Screened {len(scored)} candidates!")
 
-        if st.session_state.get("scored") and st.session_state["candidates"]:
+        if st.session_state.get("scored"):
             candidates = st.session_state["candidates"]
             st.divider()
 
@@ -548,6 +761,7 @@ with tab2:
                         st.error(f"⚠️ {' | '.join(c['red_flags'])}")
                     st.info(c.get("summary", ""))
 
+# ── TAB 3: Q&A ────────────────────────────────
 with tab3:
     st.subheader("💬 Ask Anything About the Candidates")
 
@@ -556,7 +770,7 @@ with tab3:
     else:
         candidates = st.session_state["candidates"]
 
-        st.write("**Quick questions — click any:**")
+        st.write("**Quick questions:**")
         qc1, qc2, qc3 = st.columns(3)
         quick_qs = [
             "Who is the best fit?",
@@ -585,7 +799,7 @@ with tab3:
         with st.form("question_form", clear_on_submit=True):
             typed = st.text_input(
                 "Type any question:",
-                placeholder="Who has React? / Compare Priya vs Sneha / Tell me about Arjun / Who studied at IIT?"
+                placeholder="Who has React? / Compare Priya vs Sneha / Tell me about Arjun"
             )
             submitted = st.form_submit_button("Ask ↗", use_container_width=True)
             if submitted and typed.strip():
@@ -596,7 +810,6 @@ with tab3:
 
         if st.session_state["chat_history"]:
             st.divider()
-            st.subheader("Answers")
             for item in reversed(st.session_state["chat_history"]):
                 st.markdown(f"**Q: {item['question']}**")
                 st.markdown(item["answer"])
@@ -606,6 +819,7 @@ with tab3:
                 st.session_state["chat_history"] = []
                 st.rerun()
 
+# ── TAB 4: Interview Qs ────────────────────────
 with tab4:
     st.subheader("🎤 Interview Question Generator")
 
@@ -624,8 +838,18 @@ with tab4:
                 st.markdown(f"**{i}.** {q}")
                 st.write("")
 
+# ── TAB 5: Charts ──────────────────────────────
 with tab5:
-    st.subheader("📁 Export Results")
+    st.subheader("📊 Visual Reports")
+
+    if not st.session_state["candidates"]:
+        st.info("Load resumes first in the Upload Resumes tab.")
+    else:
+        show_charts(st.session_state["candidates"])
+
+# ── TAB 6: Export ──────────────────────────────
+with tab6:
+    st.subheader("📁 Export Results to CSV")
 
     if not st.session_state["candidates"]:
         st.info("Load resumes first in the Upload Resumes tab.")
@@ -645,10 +869,11 @@ with tab5:
         st.subheader("Preview")
         rows = [{
             "Name":    c["name"],
-            "Score":   f"{c.get('score', 'N/A')}%" if c.get("score") else "Not screened",
+            "Score":   f"{c.get('score','N/A')}%" if c.get("score") else "Not screened",
             "Verdict": c.get("verdict", "Not screened"),
             "Role":    c["current_role"],
             "Exp":     f"{c['years_exp']} yrs",
             "Skills":  ", ".join(c["skills"][:4]),
         } for c in candidates]
-        st.dataframe(pd.DataFrame(rows), use_container_width=True)
+
+        st.table(rows)
