@@ -1,0 +1,156 @@
+all_skills:
+  - Python
+  - JavaScript
+  - TypeScript
+  - Java
+  - C++
+  - Go
+  - Ruby
+  - PHP
+  - React
+  - Vue.js
+  - Angular
+  - Next.js
+  - HTML
+  - CSS
+  - Node.js
+  - Django
+  - FastAPI
+  - Flask
+  - Spring Boot
+  - PostgreSQL
+  - MySQL
+  - MongoDB
+  - Redis
+  - SQLite
+  - REST APIs
+  - GraphQL
+  - AWS
+  - GCP
+  - Azure
+  - Docker
+  - Kubernetes
+  - CI/CD
+  - Machine learning
+  - TensorFlow
+  - PyTorch
+  - scikit-learn
+  - Git
+  - Linux
+  - Agile
+  - Scrum
+
+skill_map:
+  python: Python
+  javascript: JavaScript
+  typescript: TypeScript
+  java: Java
+  react: React
+  vue: Vue.js
+  angular: Angular
+  node: Node.js
+  django: Django
+  fastapi: FastAPI
+  flask: Flask
+  spring: Spring Boot
+  postgres: PostgreSQL
+  mysql: MySQL
+  mongodb: MongoDB
+  redis: Redis
+  aws: AWS
+  gcp: GCP
+  azure: Azure
+  docker: Docker
+  kubernetes: Kubernetes
+  ci/cd: CI/CD
+  cicd: CI/CD
+  graphql: GraphQL
+  rest: REST APIs
+  git: Git
+  linux: Linux
+  tensorflow: TensorFlow
+  pytorch: PyTorch
+  scikit: scikit-learn
+
+group_map:
+  cloud:
+    - AWS
+    - GCP
+    - Azure
+  frontend:
+    - React
+    - Vue.js
+    - Angular
+    - JavaScript
+    - TypeScript
+    - HTML
+    - CSS
+  backend:
+    - Python
+    - Node.js
+    - Django
+    - FastAPI
+    - Flask
+    - Spring Boot
+    - Java
+  fullstack:
+    - React
+    - Vue.js
+    - Python
+    - Node.js
+    - Django
+    - FastAPI
+  full stack:
+    - React
+    - Vue.js
+    - Python
+    - Node.js
+    - Django
+    - FastAPI
+  devops:
+    - Docker
+    - Kubernetes
+    - CI/CD
+    - AWS
+    - GCP
+    - Azure
+  ml:
+    - Machine learning
+    - TensorFlow
+    - PyTorch
+    - scikit-learn
+  machine learning:
+    - Machine learning
+    - TensorFlow
+    - PyTorch
+    - scikit-learn
+  database:
+    - PostgreSQL
+    - MySQL
+    - MongoDB
+    - Redis
+    - SQLite
+
+skill_questions:
+  Python: "Walk me through a complex Python project you built. What were the key decisions?"
+  FastAPI: "How have you used FastAPI in production? How did you handle auth and performance?"
+  Django: "How did you structure a large Django project and handle migrations at scale?"
+  React: "How do you manage state in a large React app? Redux vs Context?"
+  PostgreSQL: "How have you optimised slow PostgreSQL queries in production?"
+  Docker: "Walk me through containerising an application with Docker end to end."
+  AWS: "Which AWS services have you used and what did you build with them?"
+  GCP: "What GCP services have you used and what were the main challenges?"
+  GraphQL: "Why GraphQL over REST? What tradeoffs did you consider?"
+  TypeScript: "How has TypeScript improved your codebase? Give a specific example."
+  Node.js: "How do you handle async and errors in Node.js at scale?"
+  CI/CD: "Describe your CI/CD pipeline. What tools and why?"
+  REST APIs: "How do you design and version REST APIs? How do you handle breaking changes?"
+  Redis: "How have you used Redis in production? What caching strategies?"
+  Vue.js: "Vue vs React — key differences and when would you pick Vue?"
+  MongoDB: "When would you choose MongoDB over SQL? Give a real example."
+  Kubernetes: "How have you used Kubernetes in production? What problems did it solve?"
+  Java: "How have you used Java in a large production system?"
+  Machine learning: "Walk me through an ML project end to end — data, model, deployment."
+  scikit-learn: "What ML models have you built with scikit-learn and how did you evaluate them?"
+  Angular: "How do you handle routing and state in a large Angular app?"
+  Flask: "How did you structure a Flask app for production? How did you handle scaling?"
