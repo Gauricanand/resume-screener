@@ -1,5 +1,6 @@
 streamlit
 openpyxl
 pyyaml
-pypdf2
+PyPDF2
 python-docx
+docx2txt
