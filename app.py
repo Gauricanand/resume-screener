@@ -5,24 +5,6 @@ import re
 import yaml
 from pathlib import Path
 
-# Try all document reading libraries
-try:
-    import PyPDF2
-    PDF_OK = True
-except ImportError:
-    PDF_OK = False
-
-try:
-    import docx2txt
-    DOCX_OK = True
-except ImportError:
-    try:
-        from docx import Document as DocxDocument
-        DOCX_OK = True
-        USE_DOCX2TXT = False
-    except ImportError:
-        DOCX_OK = False
-
 st.set_page_config(
     page_title="Resume Screener",
     page_icon="🔍",
@@ -114,80 +96,125 @@ Education: B.Tech Computer Science, NIT Trichy
 Notable: Built order system handling 100k plus orders per day. ML side projects with scikit-learn."""
 
 # ================================================
-#  FILE READING — fixed to handle all cases
+#  FILE READING — supports ALL file types
 # ================================================
 
 def read_pdf(file) -> str:
-    if not PDF_OK:
-        return ""
     try:
+        import PyPDF2
         reader = PyPDF2.PdfReader(file)
-        text   = ""
-        for page in reader.pages:
-            text += (page.extract_text() or "") + "\n"
-        return text.strip()
+        return "\n".join(page.extract_text() or "" for page in reader.pages).strip()
+    except Exception:
+        pass
+    try:
+        import pdfplumber
+        with pdfplumber.open(file) as pdf:
+            return "\n".join(page.extract_text() or "" for page in pdf.pages).strip()
     except Exception:
         return ""
 
 def read_docx(file) -> str:
     try:
-        # Try docx2txt first — most reliable
         import docx2txt
         text = docx2txt.process(file)
-        return text.strip() if text else ""
+        if text and text.strip():
+            return text.strip()
     except Exception:
         pass
     try:
-        # Fallback to python-docx
-        from docx import Document as DocxDoc
-        doc  = DocxDoc(file)
+        from docx import Document
+        doc  = Document(file)
         text = "\n".join(p.text for p in doc.paragraphs)
-        return text.strip()
+        if text.strip():
+            return text.strip()
     except Exception:
-        return ""
+        pass
+    return ""
 
 def read_txt(file) -> str:
     try:
-        return file.read().decode("utf-8", errors="ignore").strip()
+        raw = file.read()
+        for enc in ["utf-8", "latin-1", "cp1252", "utf-16"]:
+            try:
+                return raw.decode(enc).strip()
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return ""
+
+def read_rtf(file) -> str:
+    try:
+        from striprtf.striprtf import rtf_to_text
+        raw  = file.read().decode("utf-8", errors="ignore")
+        return rtf_to_text(raw).strip()
+    except Exception:
+        return ""
+
+def read_odt(file) -> str:
+    try:
+        from odf.opendocument import load
+        from odf.text import P
+        doc   = load(file)
+        texts = [str(p) for p in doc.getElementsByType(P)]
+        return "\n".join(texts).strip()
     except Exception:
         return ""
 
 def extract_text(uploaded_file) -> str:
     name = uploaded_file.name.lower()
+    uploaded_file.seek(0)
+
     if name.endswith(".pdf"):
         return read_pdf(uploaded_file)
-    elif name.endswith(".docx") or name.endswith(".doc"):
+    elif name.endswith(".docx"):
         return read_docx(uploaded_file)
+    elif name.endswith(".doc"):
+        # Try reading as docx first, fallback to plain text
+        try:
+            return read_docx(uploaded_file)
+        except Exception:
+            uploaded_file.seek(0)
+            return read_txt(uploaded_file)
+    elif name.endswith(".rtf"):
+        return read_rtf(uploaded_file)
+    elif name.endswith(".odt"):
+        return read_odt(uploaded_file)
     elif name.endswith(".txt"):
         return read_txt(uploaded_file)
-    return ""
+    else:
+        # Try reading as plain text for anything else
+        return read_txt(uploaded_file)
 
 def parse_from_text(text: str, filename: str) -> dict:
-    name  = (
+    name = (
         filename
-        .replace(".pdf","").replace(".docx","").replace(".doc","").replace(".txt","")
-        .replace("_"," ").replace("-"," ")
-        .title().strip()
+        .rsplit(".", 1)[0]
+        .replace("_", " ")
+        .replace("-", " ")
+        .title()
+        .strip()
     )
-    skills    = []
-    years     = 0
-    role      = ""
-    education = ""
-    notes     = ""
 
     text_lower = text.lower()
+    skills     = []
+    years      = 0
+    role       = ""
+    education  = ""
+    notes      = ""
 
-    # Extract skills
+    # Skills
     for skill in ALL_SKILLS:
         if skill.lower() in text_lower:
             skills.append(skill)
 
-    # Extract years of experience
+    # Years of experience
     patterns = [
         r'(\d+)\+?\s*years?\s*of\s*experience',
         r'(\d+)\+?\s*years?\s*experience',
         r'experience\s*[:\-]?\s*(\d+)\+?\s*years?',
         r'(\d+)\+?\s*yrs?\s*of\s*exp',
+        r'(\d+)\+?\s*yrs?\s*exp',
     ]
     for p in patterns:
         m = re.search(p, text_lower)
@@ -195,36 +222,39 @@ def parse_from_text(text: str, filename: str) -> dict:
             years = int(m.group(1))
             break
 
-    # Extract role — look for job title keywords
-    lines = text.split("\n")
-    role_keywords = [
+    # Role
+    lines        = text.split("\n")
+    role_kws     = [
         "engineer", "developer", "manager", "analyst",
         "architect", "lead", "intern", "designer",
-        "consultant", "director", "head of", "vp of"
+        "consultant", "director", "head of", "vp",
+        "scientist", "specialist", "coordinator"
     ]
     for line in lines[:30]:
-        line_clean = line.strip()
-        if any(kw in line_clean.lower() for kw in role_keywords) and len(line_clean) < 100:
-            role = line_clean
+        line_c = line.strip()
+        if any(kw in line_c.lower() for kw in role_kws) and 5 < len(line_c) < 100:
+            role = line_c
             break
 
-    # Extract education
-    edu_kws = ["b.tech", "m.tech", "b.e.", "m.e.", "bsc", "msc",
-                "bachelor", "master", "phd", "iit", "bits", "nit",
-                "university", "college", "institute"]
+    # Education
+    edu_kws = [
+        "b.tech", "m.tech", "b.e.", "m.e.", "bsc", "msc",
+        "bachelor", "master", "phd", "iit", "bits", "nit",
+        "university", "college", "institute", "b.sc", "m.sc",
+        "b.com", "mba", "bca", "mca"
+    ]
     for line in lines:
         if any(kw in line.lower() for kw in edu_kws):
             education = line.strip()
             break
 
-    # Use first 300 chars as notes
     notes = text[:300].replace("\n", " ").strip()
 
     return {
         "name":         name,
         "current_role": role or "Not specified",
         "years_exp":    years,
-        "skills":       list(dict.fromkeys(skills)),  # remove duplicates
+        "skills":       list(dict.fromkeys(skills)),
         "education":    education,
         "notes":        notes,
     }
@@ -462,7 +492,7 @@ def answer_question(question: str, candidates: list) -> str:
 
 def generate_interview_qs(c: dict) -> list:
     questions = []
-    count = 0
+    count     = 0
     for skill in c["skills"]:
         if skill in SKILL_QUESTIONS and count < 2:
             questions.append(f"**[Technical — {skill}]** {SKILL_QUESTIONS[skill]}")
@@ -474,7 +504,7 @@ def generate_interview_qs(c: dict) -> list:
                 f"How would you approach learning it?"
             )
     questions.append(
-        "**[Behavioural]** Tell me about a time you delivered a project under tight deadlines. "
+        "**[Behavioural]** Tell me about a time you delivered under tight deadlines. "
         "What did you do and what was the outcome?"
     )
     questions.append(
@@ -533,22 +563,19 @@ def show_charts(candidates: list):
 
     st.divider()
     st.subheader("Technical vs Experience Score")
-    chart_data = {
-        c["name"].split()[0]: {
-            "Technical":  c.get("technical_score", 0),
-            "Experience": c.get("experience_score", 0),
-        }
-        for c in candidates
-    }
-    tech_data = {n: v["Technical"]  for n, v in chart_data.items()}
-    exp_data  = {n: v["Experience"] for n, v in chart_data.items()}
     col1, col2 = st.columns(2)
     with col1:
         st.write("Technical Score")
-        st.bar_chart(tech_data, use_container_width=True, height=250)
+        st.bar_chart(
+            dict(zip(names, [c.get("technical_score", 0) for c in candidates])),
+            use_container_width=True, height=250
+        )
     with col2:
         st.write("Experience Score")
-        st.bar_chart(exp_data, use_container_width=True, height=250)
+        st.bar_chart(
+            dict(zip(names, [c.get("experience_score", 0) for c in candidates])),
+            use_container_width=True, height=250
+        )
 
     st.divider()
     st.subheader("Top Skills Across All Candidates")
@@ -585,13 +612,16 @@ if "chat_history" not in st.session_state:
 # ================================================
 
 st.title("🔍 Resume Screener")
-st.caption("Upload resume files or paste them — then ask any question. Free, no API key, works in any browser.")
+st.caption("Upload any resume file — PDF, Word, TXT, RTF, ODT — then ask any question. Free, no API key needed.")
 
 with st.sidebar:
     st.header("⚙️ Settings")
     min_years = st.slider("Minimum years experience", 1, 15, 4)
     st.divider()
-    st.markdown("**Paste format:**")
+    st.markdown("**Supported file types:**")
+    st.markdown("✅ PDF\n\n✅ Word (.docx)\n\n✅ Text (.txt)\n\n✅ RTF\n\n✅ ODT")
+    st.divider()
+    st.markdown("**Or paste in this format:**")
     st.code(
         "--- CANDIDATE: Full Name ---\n"
         "Experience: 5 years\n"
@@ -620,50 +650,68 @@ tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
 # ── TAB 1 ──────────────────────────────────────
 with tab1:
     st.subheader("Upload Resumes")
+    st.write("Upload one file per candidate or paste them manually.")
 
     method = st.radio(
         "How do you want to add resumes?",
-        ["Upload files (PDF, Word, TXT)", "Paste text"],
+        ["📁 Upload files", "📝 Paste text"],
         horizontal=True
     )
 
-    if method == "Upload files (PDF, Word, TXT)":
-        st.write("Upload one file per candidate. PDF, DOCX, and TXT supported.")
+    if method == "📁 Upload files":
+        st.info("Supported: PDF, DOCX, DOC, TXT, RTF, ODT — upload one file per candidate")
 
         uploaded_files = st.file_uploader(
             "Upload resume files",
-            type=["pdf", "docx", "doc", "txt"],
-            accept_multiple_files=True
+            type=["pdf", "docx", "doc", "txt", "rtf", "odt"],
+            accept_multiple_files=True,
+            label_visibility="collapsed"
         )
 
         if uploaded_files:
-            if st.button("✅ Load Uploaded Resumes", type="primary", use_container_width=True):
+            st.write(f"**{len(uploaded_files)} file(s) selected:**")
+            for f in uploaded_files:
+                st.write(f"- {f.name} ({round(f.size/1024, 1)} KB)")
+
+            if st.button("✅ Load All Resumes", type="primary", use_container_width=True):
                 parsed = []
                 errors = []
-                for f in uploaded_files:
+                progress = st.progress(0)
+
+                for i, f in enumerate(uploaded_files):
+                    f.seek(0)
                     text = extract_text(f)
-                    if text.strip():
+                    if text and len(text.strip()) > 20:
                         candidate = parse_from_text(text, f.name)
                         parsed.append(candidate)
                     else:
                         errors.append(f.name)
+                    progress.progress((i + 1) / len(uploaded_files))
+
+                progress.empty()
 
                 if errors:
                     st.warning(
-                        f"Could not read these files: {', '.join(errors)}\n\n"
-                        "Try saving them as .txt format instead."
+                        f"⚠️ Could not read: **{', '.join(errors)}**\n\n"
+                        "These files may be scanned images or corrupted. "
+                        "Try copy-pasting the text from those files using the Paste text option."
                     )
 
                 if parsed:
-                    st.session_state["candidates"]   = parsed
+                    existing = st.session_state.get("candidates", [])
+                    existing_names = [c["name"] for c in existing]
+                    new_candidates = [c for c in parsed if c["name"] not in existing_names]
+                    all_candidates = existing + new_candidates
+
+                    st.session_state["candidates"]   = all_candidates
                     st.session_state["scored"]       = False
                     st.session_state["chat_history"] = []
-                    st.success(f"Loaded {len(parsed)} candidates!")
+                    st.success(f"✅ Loaded {len(parsed)} candidates! Total: {len(all_candidates)}")
                     st.rerun()
                 else:
                     st.error(
-                        "Could not read any files.\n\n"
-                        "**Quick fix:** Open Word → File → Save As → Plain Text (.txt) → upload that instead."
+                        "❌ Could not read any files.\n\n"
+                        "**Try this:** Use the Paste text option instead and copy the resume text directly."
                     )
 
     else:
@@ -692,17 +740,26 @@ with tab1:
                     st.session_state["resumes_raw"]  = resumes_input
                     st.session_state["scored"]       = False
                     st.session_state["chat_history"] = []
-                    st.success(f"Loaded {len(parsed)} candidates!")
+                    st.success(f"✅ Loaded {len(parsed)} candidates!")
                     st.rerun()
 
     if st.session_state["candidates"]:
         st.divider()
-        st.subheader(f"Loaded Candidates ({len(st.session_state['candidates'])})")
+        col_a, col_b = st.columns([3, 1])
+        with col_a:
+            st.subheader(f"Loaded Candidates ({len(st.session_state['candidates'])})")
+        with col_b:
+            if st.button("🗑️ Clear all", use_container_width=True):
+                st.session_state["candidates"]   = []
+                st.session_state["scored"]       = False
+                st.session_state["chat_history"] = []
+                st.rerun()
+
         for i, c in enumerate(st.session_state["candidates"], 1):
             with st.expander(f"{i}. {c['name']} — {c['current_role']}"):
                 st.write(f"**Experience:** {c['years_exp']} years")
                 st.write(f"**Education:** {c['education'] or 'Not specified'}")
-                st.write(f"**Skills:** {', '.join(c['skills']) or 'Not listed'}")
+                st.write(f"**Skills detected:** {', '.join(c['skills']) or 'Not detected'}")
                 st.write(f"**Notes:** {c['notes'] or 'None'}")
 
 # ── TAB 2 ──────────────────────────────────────
@@ -735,7 +792,7 @@ with tab2:
                     st.session_state["candidates"] = scored
                     st.session_state["jd_val"]     = jd_input
                     st.session_state["scored"]     = True
-                    st.success(f"Screened {len(scored)} candidates!")
+                    st.success(f"✅ Screened {len(scored)} candidates!")
 
         if st.session_state.get("scored"):
             candidates = st.session_state["candidates"]
