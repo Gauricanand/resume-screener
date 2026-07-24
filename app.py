@@ -3,6 +3,8 @@ import csv
 import io
 import re
 import yaml
+import zipfile
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 st.set_page_config(
@@ -96,43 +98,45 @@ Education: B.Tech Computer Science, NIT Trichy
 Notable: Built order system handling 100k plus orders per day. ML side projects with scikit-learn."""
 
 # ================================================
-#  FILE READING — supports ALL file types
+#  FILE READING — pure Python, no extra libraries
 # ================================================
+
+def read_docx_pure(file) -> str:
+    """
+    Read .docx using only Python's built-in zipfile and xml
+    No external libraries needed — always works
+    """
+    try:
+        file.seek(0)
+        with zipfile.ZipFile(file, 'r') as z:
+            with z.open('word/document.xml') as xml_file:
+                tree = ET.parse(xml_file)
+                root = tree.getroot()
+                ns   = {'w': 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'}
+                texts = []
+                for para in root.iter('{http://schemas.openxmlformats.org/wordprocessingml/2006/main}p'):
+                    para_text = []
+                    for node in para.iter('{http://schemas.openxmlformats.org/wordprocessingml/2006/main}t'):
+                        if node.text:
+                            para_text.append(node.text)
+                    if para_text:
+                        texts.append(''.join(para_text))
+                return '\n'.join(texts).strip()
+    except Exception:
+        return ""
 
 def read_pdf(file) -> str:
     try:
         import PyPDF2
+        file.seek(0)
         reader = PyPDF2.PdfReader(file)
         return "\n".join(page.extract_text() or "" for page in reader.pages).strip()
     except Exception:
-        pass
-    try:
-        import pdfplumber
-        with pdfplumber.open(file) as pdf:
-            return "\n".join(page.extract_text() or "" for page in pdf.pages).strip()
-    except Exception:
         return ""
-
-def read_docx(file) -> str:
-    try:
-        import docx2txt
-        text = docx2txt.process(file)
-        if text and text.strip():
-            return text.strip()
-    except Exception:
-        pass
-    try:
-        from docx import Document
-        doc  = Document(file)
-        text = "\n".join(p.text for p in doc.paragraphs)
-        if text.strip():
-            return text.strip()
-    except Exception:
-        pass
-    return ""
 
 def read_txt(file) -> str:
     try:
+        file.seek(0)
         raw = file.read()
         for enc in ["utf-8", "latin-1", "cp1252", "utf-16"]:
             try:
@@ -146,20 +150,20 @@ def read_txt(file) -> str:
 def read_rtf(file) -> str:
     try:
         from striprtf.striprtf import rtf_to_text
+        file.seek(0)
         raw  = file.read().decode("utf-8", errors="ignore")
         return rtf_to_text(raw).strip()
     except Exception:
-        return ""
-
-def read_odt(file) -> str:
-    try:
-        from odf.opendocument import load
-        from odf.text import P
-        doc   = load(file)
-        texts = [str(p) for p in doc.getElementsByType(P)]
-        return "\n".join(texts).strip()
-    except Exception:
-        return ""
+        # Fallback — strip RTF tags manually
+        try:
+            file.seek(0)
+            raw  = file.read().decode("utf-8", errors="ignore")
+            text = re.sub(r'\\[a-z]+\d*\s?', ' ', raw)
+            text = re.sub(r'[{}]', '', text)
+            text = re.sub(r'\s+', ' ', text)
+            return text.strip()
+        except Exception:
+            return ""
 
 def extract_text(uploaded_file) -> str:
     name = uploaded_file.name.lower()
@@ -167,24 +171,54 @@ def extract_text(uploaded_file) -> str:
 
     if name.endswith(".pdf"):
         return read_pdf(uploaded_file)
-    elif name.endswith(".docx"):
-        return read_docx(uploaded_file)
-    elif name.endswith(".doc"):
-        # Try reading as docx first, fallback to plain text
+
+    elif name.endswith(".docx") or name.endswith(".doc"):
+        # Try pure Python first — always works
+        text = read_docx_pure(uploaded_file)
+        if text and len(text.strip()) > 20:
+            return text
+        # Fallback to docx2txt
         try:
-            return read_docx(uploaded_file)
-        except Exception:
+            import docx2txt
             uploaded_file.seek(0)
-            return read_txt(uploaded_file)
+            text = docx2txt.process(uploaded_file)
+            if text and text.strip():
+                return text.strip()
+        except Exception:
+            pass
+        # Fallback to python-docx
+        try:
+            from docx import Document
+            uploaded_file.seek(0)
+            doc  = Document(uploaded_file)
+            text = "\n".join(p.text for p in doc.paragraphs)
+            if text.strip():
+                return text.strip()
+        except Exception:
+            pass
+        return ""
+
     elif name.endswith(".rtf"):
         return read_rtf(uploaded_file)
+
     elif name.endswith(".odt"):
-        return read_odt(uploaded_file)
+        try:
+            from odf.opendocument import load
+            from odf.text import P
+            uploaded_file.seek(0)
+            doc   = load(uploaded_file)
+            texts = [str(p) for p in doc.getElementsByType(P)]
+            return "\n".join(texts).strip()
+        except Exception:
+            return read_txt(uploaded_file)
+
     elif name.endswith(".txt"):
         return read_txt(uploaded_file)
+
     else:
-        # Try reading as plain text for anything else
+        # Try txt as last resort
         return read_txt(uploaded_file)
+
 
 def parse_from_text(text: str, filename: str) -> dict:
     name = (
@@ -201,14 +235,11 @@ def parse_from_text(text: str, filename: str) -> dict:
     years      = 0
     role       = ""
     education  = ""
-    notes      = ""
 
-    # Skills
     for skill in ALL_SKILLS:
         if skill.lower() in text_lower:
             skills.append(skill)
 
-    # Years of experience
     patterns = [
         r'(\d+)\+?\s*years?\s*of\s*experience',
         r'(\d+)\+?\s*years?\s*experience',
@@ -222,13 +253,11 @@ def parse_from_text(text: str, filename: str) -> dict:
             years = int(m.group(1))
             break
 
-    # Role
-    lines        = text.split("\n")
-    role_kws     = [
+    lines    = text.split("\n")
+    role_kws = [
         "engineer", "developer", "manager", "analyst",
         "architect", "lead", "intern", "designer",
-        "consultant", "director", "head of", "vp",
-        "scientist", "specialist", "coordinator"
+        "consultant", "director", "scientist", "specialist"
     ]
     for line in lines[:30]:
         line_c = line.strip()
@@ -236,7 +265,6 @@ def parse_from_text(text: str, filename: str) -> dict:
             role = line_c
             break
 
-    # Education
     edu_kws = [
         "b.tech", "m.tech", "b.e.", "m.e.", "bsc", "msc",
         "bachelor", "master", "phd", "iit", "bits", "nit",
@@ -612,7 +640,7 @@ if "chat_history" not in st.session_state:
 # ================================================
 
 st.title("🔍 Resume Screener")
-st.caption("Upload any resume file — PDF, Word, TXT, RTF, ODT — then ask any question. Free, no API key needed.")
+st.caption("Upload any resume file — PDF, Word, TXT — then ask any question. Free, no API key needed.")
 
 with st.sidebar:
     st.header("⚙️ Settings")
@@ -650,7 +678,6 @@ tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
 # ── TAB 1 ──────────────────────────────────────
 with tab1:
     st.subheader("Upload Resumes")
-    st.write("Upload one file per candidate or paste them manually.")
 
     method = st.radio(
         "How do you want to add resumes?",
@@ -659,7 +686,7 @@ with tab1:
     )
 
     if method == "📁 Upload files":
-        st.info("Supported: PDF, DOCX, DOC, TXT, RTF, ODT — upload one file per candidate")
+        st.info("Supported: PDF, DOCX, DOC, TXT, RTF, ODT — one file per candidate")
 
         uploaded_files = st.file_uploader(
             "Upload resume files",
@@ -674,8 +701,8 @@ with tab1:
                 st.write(f"- {f.name} ({round(f.size/1024, 1)} KB)")
 
             if st.button("✅ Load All Resumes", type="primary", use_container_width=True):
-                parsed = []
-                errors = []
+                parsed   = []
+                errors   = []
                 progress = st.progress(0)
 
                 for i, f in enumerate(uploaded_files):
@@ -691,17 +718,13 @@ with tab1:
                 progress.empty()
 
                 if errors:
-                    st.warning(
-                        f"⚠️ Could not read: **{', '.join(errors)}**\n\n"
-                        "These files may be scanned images or corrupted. "
-                        "Try copy-pasting the text from those files using the Paste text option."
-                    )
+                    st.warning(f"⚠️ Could not read: **{', '.join(errors)}** — try the Paste text option for these.")
 
                 if parsed:
-                    existing = st.session_state.get("candidates", [])
+                    existing       = st.session_state.get("candidates", [])
                     existing_names = [c["name"] for c in existing]
-                    new_candidates = [c for c in parsed if c["name"] not in existing_names]
-                    all_candidates = existing + new_candidates
+                    new_ones       = [c for c in parsed if c["name"] not in existing_names]
+                    all_candidates = existing + new_ones
 
                     st.session_state["candidates"]   = all_candidates
                     st.session_state["scored"]       = False
@@ -709,10 +732,7 @@ with tab1:
                     st.success(f"✅ Loaded {len(parsed)} candidates! Total: {len(all_candidates)}")
                     st.rerun()
                 else:
-                    st.error(
-                        "❌ Could not read any files.\n\n"
-                        "**Try this:** Use the Paste text option instead and copy the resume text directly."
-                    )
+                    st.error("❌ Could not read any files. Try the Paste text option instead.")
 
     else:
         if st.button("📥 Load Sample Data", use_container_width=True):
